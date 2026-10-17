@@ -4,6 +4,12 @@ const historySchema = new Schema({
   at: { type: Date, default: Date.now }, by: { type: Schema.Types.ObjectId, ref: 'User' }, byName: String,
   action: String, from: String, to: String, reason: String,
 }, { _id: false });
+const checklistItemSchema = new Schema({
+  label: { type: String, required: true, trim: true },
+  custom: { type: Boolean, default: false },
+  done: { type: Boolean, default: false },
+  doneBy: { type: Schema.Types.ObjectId, ref: 'User' }, doneByName: String, doneAt: Date,
+});
 module.exports = model('Room', new Schema({
   roomNumber: { type: String, required: true, unique: true, trim: true },
   floor: { type: Number, required: true },
@@ -19,4 +25,5 @@ module.exports = model('Room', new Schema({
   statusBeforeHold: String, // restored on unblock / restore
   active: { type: Boolean, default: true },
   history: { type: [historySchema], default: [] },
+  checklist: { type: [checklistItemSchema], default: [] }, // housekeeping checklist; empty = default items are filled in on first use
 }, { timestamps: true }));

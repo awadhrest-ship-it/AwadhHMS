@@ -4,6 +4,7 @@ const { ROOM_STATUSES } = require('../config/permissions');
 const { audit } = require('../services/audit');
 const availability = require('../services/availability');
 const { setRoomStatus, hold, release } = require('../services/roomStatus');
+const checklist = require('../services/checklist');
 const { wrap, parse, escapeRegex } = require('../utils/wrap');
 const { bad, notFound, conflict } = require('../utils/ApiError');
 const { todayStr, toDate } = require('../utils/dates');
@@ -51,7 +52,9 @@ exports.getRoom = wrap(async (req, res) => {
   const current = await Reservation.findOne({ room: room._id, status: 'Checked In' }).populate('guest', 'firstName lastName phone');
   const upcoming = await Reservation.find({ room: room._id, status: { $in: ['Confirmed', 'Pending'] }, checkOut: { $gt: toDate(todayStr()) } }).sort({ checkIn: 1 }).limit(5).populate('guest', 'firstName lastName');
   const past = await Reservation.find({ room: room._id, status: { $in: ['Checked Out'] } }).sort({ checkOut: -1 }).limit(10).populate('guest', 'firstName lastName');
-  res.json({ success: true, data: { ...room.toObject(), currentReservation: current, upcoming, stayHistory: past } });
+  if (checklist.ensure(room)) await room.save(); // legacy rooms: store the default checklist / fix stale ticks on ready rooms
+  const obj = room.toObject();
+  res.json({ success: true, data: { ...obj, currentReservation: current, upcoming, stayHistory: past } });
 });
 exports.createRoom = wrap(async (req, res) => {
   const b = parse(roomSchema, req.body);
@@ -82,6 +85,7 @@ exports.changeStatus = wrap(async (req, res) => {
   const { status, reason } = parse(z.object({ status: z.enum(ROOM_STATUSES), reason: z.string().optional() }), req.body);
   const room = await Room.findById(req.params.id); if (!room) throw notFound('Room not found');
   const before = room.toObject();
+  if (status === 'Available') checklist.assertComplete(room); // housekeeping checklist must be fully ticked first
   if (status === 'Blocked' || status === 'Out of Order') await hold(room, status, req, reason);
   else if (['Blocked', 'Out of Order'].includes(room.status)) {
     if (status !== 'Vacant & Clean' && status !== 'Available') throw bad('Use unblock / restore to release this room first');
@@ -93,6 +97,34 @@ exports.changeStatus = wrap(async (req, res) => {
   }
   await audit(req, { action: 'status', module: 'Rooms', entity: 'Room', entityId: room._id, entityLabel: room.roomNumber, oldValue: { status: before.status, blocked: before.blocked, outOfOrder: before.outOfOrder }, newValue: { status: room.status, blocked: room.blocked, outOfOrder: room.outOfOrder }, note: reason });
   res.json({ success: true, data: room });
+});
+
+/* ---- housekeeping checklist (visible to anyone with rooms.view; changed with rooms.status) ---- */
+exports.toggleChecklistItem = wrap(async (req, res) => {
+  const { done } = parse(z.object({ done: z.boolean() }), req.body);
+  const room = await Room.findById(req.params.id); if (!room) throw notFound('Room not found');
+  checklist.ensure(room); checklist.assertOpen(room);
+  const item = room.checklist.id(req.params.itemId); if (!item) throw notFound('Checklist item not found');
+  item.done = done; item.doneBy = done ? req.user._id : undefined; item.doneByName = done ? req.user.name : undefined; item.doneAt = done ? new Date() : undefined;
+  await room.save();
+  res.json({ success: true, data: room.checklist });
+});
+exports.addChecklistItem = wrap(async (req, res) => {
+  const { label } = parse(z.object({ label: z.string().trim().min(1).max(100) }), req.body);
+  const room = await Room.findById(req.params.id); if (!room) throw notFound('Room not found');
+  checklist.ensure(room); checklist.assertOpen(room);
+  if (room.checklist.some((i) => i.label.toLowerCase() === label.toLowerCase())) throw bad('That item is already on the checklist');
+  room.checklist.push({ label, custom: true });
+  await room.save();
+  res.status(201).json({ success: true, data: room.checklist });
+});
+exports.deleteChecklistItem = wrap(async (req, res) => {
+  const room = await Room.findById(req.params.id); if (!room) throw notFound('Room not found');
+  checklist.ensure(room); checklist.assertOpen(room);
+  const item = room.checklist.id(req.params.itemId); if (!item) throw notFound('Checklist item not found');
+  if (!item.custom) throw bad('Standard checklist items cannot be removed');
+  item.deleteOne(); await room.save();
+  res.json({ success: true, data: room.checklist });
 });
 
 exports.availability = wrap(async (req, res) => {

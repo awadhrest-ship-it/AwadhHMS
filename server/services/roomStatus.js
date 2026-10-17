@@ -1,6 +1,7 @@
 const { Room } = require('../models');
 const { ROOM_STATUSES } = require('../config/permissions');
 const { bad } = require('../utils/ApiError');
+const { onStatusChange } = require('./checklist');
 
 const pushHistory = (room, req, entry) => {
   room.history.push({ at: new Date(), by: req?.user?._id, byName: req?.user?.name, ...entry });
@@ -17,6 +18,7 @@ async function setRoomStatus(room, status, req, { reason, action = 'status' } = 
   room.outOfOrder = status === 'Out of Order';
   if (status === 'Blocked' || status === 'Out of Order') { room.statusBeforeHold = from; room.statusReason = reason; }
   else room.statusReason = undefined;
+  onStatusChange(room, from, status, req?.user); // checklist follows the room: reset when it needs cleaning, all done when it is ready
   pushHistory(room, req, { action, from, to: status, reason });
   await room.save();
   return room;

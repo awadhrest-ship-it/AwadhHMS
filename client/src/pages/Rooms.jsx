@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Plus, Search, Pencil, Lock, Unlock, Wrench, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Search, Pencil, Lock, Unlock, Wrench, RotateCcw, ChevronLeft, ChevronRight, Trash2, ClipboardCheck } from 'lucide-react';
 import { useGet, useAction, useDebounced } from '../hooks/useApi';
 import api from '../services/api';
 import { useAuth } from '../store/auth';
@@ -22,13 +22,44 @@ function Tile({ room, onClick }) {
   );
 }
 
+const CLEANING_CYCLE = ['Vacant & Dirty', 'Cleaning in Progress', 'Inspection Pending', 'Maintenance Required', 'Vacant & Clean']; // keep in sync with server/services/checklist.js
+const LOCKED_NOTE = { Available: 'Room is cleaned and ready. The checklist is locked and resets automatically after the next check-out.', Reserved: 'Room is cleaned and reserved. The checklist is locked and resets automatically after check-out.', Occupied: 'A guest is in the room. The checklist opens again after check-out, when the room becomes Vacant & Dirty.', Blocked: 'Checklist is locked while the room is blocked.', 'Out of Order': 'Checklist is locked while the room is out of order.' };
+
+/* ---------------- Housekeeping checklist (everyone with rooms.view sees it; rooms.status can tick / add) ---------------- */
+function Checklist({ room, onChanged }) {
+  const can = useAuth((s) => s.can); const open = CLEANING_CYCLE.includes(room.status); const editable = can('rooms.status') && open; // locked once the room is ready (Available / Reserved / Occupied) or on hold
+  const [items, setItems] = useState(room.checklist || []); const [label, setLabel] = useState(''); const [run, busy] = useAction();
+  useEffect(() => { setItems(room.checklist || []); }, [room.checklist]);
+  const done = items.filter((i) => i.done).length; const all = items.length > 0 && done === items.length;
+  const call = async (fn, okMsg) => { try { const r = await run(fn); setItems(r.data.data); onChanged(); if (okMsg) toast.success(okMsg); return true; } catch (e) { toast.error(e.message); return false; } };
+  const toggle = (it) => call(() => api.patch(`/rooms/${room._id}/checklist/${it._id}`, { done: !it.done }));
+  const add = async () => { const l = label.trim(); if (!l) return; if (await call(() => api.post(`/rooms/${room._id}/checklist`, { label: l }), 'Item added')) setLabel(''); };
+  const remove = (it) => call(() => api.delete(`/rooms/${room._id}/checklist/${it._id}`), 'Item removed');
+  return (
+    <div className="rounded-xl border border-slate-200 p-4">
+      <div className="mb-2 flex items-center justify-between"><p className="flex items-center gap-1.5 text-xs font-bold text-slate-600"><ClipboardCheck size={14} />Housekeeping checklist</p><span className={cx('flex items-center gap-1 text-xs font-bold', all ? 'text-green-600' : 'text-slate-500')}>{!open && <Lock size={11} />}{done}/{items.length} done</span></div>
+      <ul className={cx('space-y-1.5', !open && 'opacity-70')}>{items.map((it) => (
+        <li key={it._id || it.label} className="flex items-start gap-2 text-sm">
+          <label className={cx('flex flex-1 items-start gap-2', editable ? 'cursor-pointer' : 'cursor-default')}>
+            <input type="checkbox" className="mt-0.5 h-4 w-4 rounded border-slate-300" checked={!!it.done} disabled={!editable || busy || !it._id} onChange={() => toggle(it)} />
+            <span className={cx(it.done && 'text-slate-400 line-through')}>{it.label}{it.custom && <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 no-underline">Custom</span>}
+              {it.done && it.doneByName && <span className="block text-[11px] text-slate-400 no-underline">{it.doneByName}{it.doneAt ? ` · ${new Date(it.doneAt).toLocaleString('en-IN')}` : ''}</span>}</span>
+          </label>
+          {editable && it.custom && it._id && <button type="button" onClick={() => remove(it)} disabled={busy} className="text-slate-400 hover:text-red-600" aria-label={`Remove ${it.label}`}><Trash2 size={14} /></button>}
+        </li>))}</ul>
+      {editable && <div className="mt-3 flex gap-2"><Input value={label} maxLength={100} placeholder="Add a custom item (optional)" onChange={(e) => setLabel(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} /><Button size="sm" variant="secondary" onClick={add} disabled={!label.trim()} loading={busy}><Plus size={14} />Add</Button></div>}
+      <p className="mt-2 text-[11px] text-slate-400">{!open ? (LOCKED_NOTE[room.status] || 'Checklist is locked.') : all ? 'All items done. The room can be marked Available.' : 'Every item must be ticked before a room is marked Available.'}</p>
+    </div>
+  );
+}
+
 /* ---------------- Room detail drawer ---------------- */
 function RoomDrawer({ id, onClose, onChanged, cats }) {
   const can = useAuth((s) => s.can);
   const st = useGet(id ? `/rooms/${id}` : null, null, [id]);
   const [dlg, setDlg] = useState(null); const [run, busy] = useAction(); const [err, setErr] = useState(''); const [edit, setEdit] = useState(false); const navigate = useNavigate();
   const room = st.data;
-  const doStatus = async (status, reason) => { setErr(''); try { await run(() => api.patch(`/rooms/${id}/status`, { status, reason })); toast.success(`Room ${room.roomNumber} updated`); setDlg(null); st.reload(); onChanged(); } catch (e) { setErr(e.message); } };
+  const doStatus = async (status, reason) => { setErr(''); try { await run(() => api.patch(`/rooms/${id}/status`, { status, reason })); toast.success(`Room ${room.roomNumber} updated`); setDlg(null); st.reload(); onChanged(); } catch (e) { setErr(e.message); if (!dlg) toast.error(e.message); } };
   const holdKinds = { block: ['Blocked', 'Block room', 'Blocked rooms cannot be booked until released.'], ooo: ['Out of Order', 'Mark out of order', 'Out-of-order rooms cannot be booked until restored.'] };
   return (
     <>
@@ -46,6 +77,7 @@ function RoomDrawer({ id, onClose, onChanged, cats }) {
             <div><p className="label">Photos</p>{r.photos?.length ? <div className="flex gap-2 overflow-x-auto">{r.photos.map((p) => <img key={p} src={p} alt="" className="h-20 w-28 rounded-lg object-cover" />)}</div> : <p className="text-sm text-slate-400">No photos added yet. Add image links when editing the room.</p>}</div>
             <div><p className="label">Current booking</p>{r.currentReservation ? <button onClick={() => navigate(`/reservations/${r.currentReservation._id}`)} className="w-full rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-left text-sm"><b>{fullName(r.currentReservation.guest)}</b><br /><span className="text-slate-600">{r.currentReservation.reservationNumber} · {stayRange(r.currentReservation.checkIn, r.currentReservation.checkOut)}</span></button> : <p className="text-sm text-slate-400">No guest in the room.</p>}</div>
             {r.upcoming?.length > 0 && <div><p className="label">Upcoming</p><ul className="space-y-1 text-sm">{r.upcoming.map((u) => <li key={u._id} className="flex justify-between"><span>{fullName(u.guest)}</span><span className="text-slate-500">{stayRange(u.checkIn, u.checkOut)}</span></li>)}</ul></div>}
+            <Checklist room={r} onChanged={onChanged} />
             <div><p className="label">Room history</p>
               <ul className="space-y-2 border-l-2 border-slate-100 pl-4">{[...(r.history || [])].reverse().slice(0, 12).map((h, i) => <li key={i} className="text-xs"><span className="font-semibold text-slate-700">{h.action}</span>{h.from && <span className="text-slate-500"> · {h.from} → {h.to}</span>}{h.reason && <span className="text-slate-500"> · {h.reason}</span>}<br /><span className="text-slate-400">{h.byName || 'System'} · {new Date(h.at).toLocaleString('en-IN')}</span></li>)}{!(r.history || []).length && <li className="text-sm text-slate-400">No changes recorded yet.</li>}</ul>
               {r.stayHistory?.length > 0 && <ul className="mt-3 space-y-1 text-xs text-slate-500">{r.stayHistory.map((s) => <li key={s._id}>{fullName(s.guest)} · {stayRange(s.checkIn, s.checkOut)}</li>)}</ul>}</div>

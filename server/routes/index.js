@@ -47,6 +47,9 @@ router.get('/rooms/:id', rp('rooms.view'), rooms.getRoom);
 router.put('/rooms/:id', rp('rooms.edit'), rooms.updateRoom);
 router.delete('/rooms/:id', rp('rooms.delete'), rooms.deleteRoom);
 router.patch('/rooms/:id/status', rp('rooms.status'), rooms.changeStatus);
+router.patch('/rooms/:id/checklist/:itemId', rp('rooms.status'), rooms.toggleChecklistItem);
+router.post('/rooms/:id/checklist', rp('rooms.status'), rooms.addChecklistItem);
+router.delete('/rooms/:id/checklist/:itemId', rp('rooms.status'), rooms.deleteChecklistItem);
 
 router.get('/rate-plans', rp('rates.view'), rates.list);
 router.post('/rate-plans/quote', rp('rates.view', 'reservations.create'), rates.quote);
