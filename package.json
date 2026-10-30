@@ -1,0 +1,22 @@
+{
+  "name": "awadh-palace-hms",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Awadh Palace Hotel Management System - Phases 1-6 (MERN)",
+  "scripts": {
+    "install:all": "npm install && npm --prefix server install && npm --prefix client install",
+    "dev": "concurrently -n server,client -c blue,green \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "seed": "npm --prefix server run seed",
+    "build": "npm --prefix client run build",
+    "test:server": "npm --prefix server test",
+    "test:client": "node --test client/src/utils/restaurantMath.test.js",
+    "migrate": "npm --prefix server run migrate",
+    "seed:phase45": "npm --prefix server run seed:phase45",
+    "seed:phase6": "npm --prefix server run seed:phase6"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
